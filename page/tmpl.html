@@ -1,0 +1,77 @@
+<title>bench & oracle</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* layout: one reading column, sticky command chips, each command = header row + terminal block */
+:root {
+  --bg: #f5f6fb; --panel: #ffffff; --ink: #1b2030; --muted: #5b6276; --line: #dfe2ee;
+  --pink: #c2417f; --blue: #2f63c4; --term: #171b27; --term-ink: #e6e9f2; --term-dim: #8f97ad;
+  --ok: #2d8a5f; --warn: #b8572a;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11141d; --panel: #181c28; --ink: #eceef5; --muted: #9aa1b5; --line: #2a3042;
+  --pink: #f08fc0; --blue: #8db6f5; --term: #0b0e15; --term-ink: #e6e9f2; --term-dim: #7f879c;
+  --ok: #6fd3a0; --warn: #f2a07a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11141d; --panel: #181c28; --ink: #eceef5; --muted: #9aa1b5; --line: #2a3042;
+  --pink: #f08fc0; --blue: #8db6f5; --term: #0b0e15; --term-ink: #e6e9f2; --term-dim: #7f879c;
+  --ok: #6fd3a0; --warn: #f2a07a; color-scheme: dark }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.55 var(--body); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.wrap { max-width: 920px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header h1 { font: 700 clamp(2.2rem, 6vw, 3.4rem)/1.05 var(--display); margin: 0; letter-spacing: -0.02em; text-wrap: balance; }
+header h1 .amp { color: var(--pink); }
+header p { color: var(--muted); max-width: 62ch; margin: 12px 0 0; }
+.quick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; font: 14px var(--mono); }
+.quick code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg);
+  display: flex; flex-wrap: wrap; gap: 6px; padding-block: 12px; margin-top: 28px; border-bottom: 1px solid var(--line); }
+nav a { font: 500 14px var(--mono); color: var(--ink); text-decoration: none; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
+nav a:hover, nav a:focus-visible { border-color: var(--blue); color: var(--blue); outline: none; }
+main { display: grid; gap: 44px; margin-top: 32px; }
+section { display: grid; gap: 14px; scroll-margin-top: 70px; min-width: 0; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.head h2 { font: 700 1.6rem/1.1 var(--display); margin: 0; }
+.head h2 span { color: var(--blue); }
+.tag { font: 500 12px var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--pink); }
+.what { margin: 0; max-width: 65ch; }
+.cmds { display: flex; flex-wrap: wrap; gap: 6px; font: 13px var(--mono); }
+.cmds code { color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; }
+figure { margin: 0; min-width: 0; }
+figcaption { font: 13px var(--mono); color: var(--muted); margin-bottom: 6px; }
+figcaption b { color: var(--pink); font-weight: 600; }
+pre { margin: 0; background: var(--term); color: var(--term-ink); border-radius: 10px; padding: 16px 18px;
+  font: 13px/1.55 var(--mono); overflow-x: auto; font-variant-numeric: tabular-nums; }
+pre .bad { color: #ff9db8; font-weight: 600; }
+pre .q { color: #ffd88a; }
+pre .ok { color: #8ee0b5; }
+pre .dim { color: var(--term-dim); }
+.note { font-size: 14px; color: var(--muted); margin: 0; max-width: 65ch; }
+footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+@media (max-width: 480px) { pre { font-size: 11.5px; padding: 12px; } }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>bench <span class="amp">&amp;</span> oracle</h1>
+  <p>my pc testing & troubleshooting tool. every command saves what it finds, & every test can compare two runs so i can see if a change helped. <code>oracle</code> is the same tool, just a cooler name.</p>
+  <div class="quick"><code>bench --help</code><code>bench &lt;thing&gt; list</code><code>bench &lt;thing&gt; compare</code><code>oracle state</code></div>
+</header>
+
+<nav aria-label="commands">
+  <a href="#state">state</a><a href="#logs">logs</a><a href="#cpu">cpu</a><a href="#gpu">gpu</a><a href="#disk">disk</a><a href="#mem">mem</a>
+</nav>
+
+<main>
+__SECTIONS__
+</main>
+
+<footer>everything saves to <code>~/logs/</code>: tests in <code>bench/&lt;thing&gt;/</code>, game logs in <code>games/&lt;game&gt;/</code>, reports in <code>state/</code>. all the output on this page is real, from my pc on oct 27.</footer>
+</div>
