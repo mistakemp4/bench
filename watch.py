@@ -9,11 +9,14 @@ import psutil
 
 import cpu
 import hw
+import protonlog
 from common import LOGS
 
 SENSORS = LOGS / "sensors"
 EVERY = 2
 IGNORED_APPS = {"431960"}  # wallpaper engine
+KEEP_DAYS = 30
+RELAUNCH_GRACE = 15
 TS = "%Y-%m-%d %H:%M:%S"
 FIELDS = ["time", "vram", "vram_total", "gpu_temp", "gpu_mhz", "gpu_watts", "gpu_util", "fan",
           "gpu_thermal", "cpu_pkg", "cpu_mhz", "cpu_util", "ram_gb", "swap_gb"]
@@ -40,13 +43,23 @@ def sample():
 
 def record(appid, live):
     SENSORS.mkdir(parents=True, exist_ok=True)
-    path = SENSORS / f"{datetime.now():%Y%m%d-%H%M%S}-{appid}.csv"
+    started = datetime.now()
+    path = SENSORS / f"{started:%Y%m%d-%H%M%S}-{appid}.csv"
     print(f"game {appid} started, recording to {path}", flush=True)
     psutil.cpu_percent(None)  # first call is always 0
     with path.open("w", newline="") as f:
         w = csv.DictWriter(f, FIELDS)
         w.writeheader()
-        while game_running() == appid:
+        gone = None
+        while True:
+            # some games relaunch themselves, wait before calling it closed
+            if game_running() != appid:
+                gone = gone or time.monotonic()
+                if time.monotonic() - gone >= RELAUNCH_GRACE:
+                    break
+                time.sleep(EVERY)
+                continue
+            gone = None
             s = sample()
             w.writerow(s)
             f.flush()
@@ -57,15 +70,28 @@ def record(appid, live):
                       f"cpu {fmt(s['cpu_pkg'])}°C  ram {s['ram_gb']} GB   ", end="", flush=True)
             time.sleep(EVERY)
     print(("\n" if live else "") + f"game {appid} closed", flush=True)
+    if saved := protonlog.game_closed(appid, started):
+        print(f"saved proton log to {saved}", flush=True)
+
+def cleanup():
+    cutoff = time.time() - KEEP_DAYS * 86400
+    for d in (SENSORS, protonlog.SAVED):
+        for f in d.glob("*"):
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
 
 def cmd_watch(args):
     live = sys.stdout.isatty()
     if live:
         print("waiting for a steam game... (ctrl+c to stop)")
     try:
+        cleanup()
         while True:
             if app := game_running():
                 record(app, live)
+                cleanup()
+            elif protonlog.armed():
+                protonlog.ensure_links()  # a proton update can remove them
             time.sleep(5)
     except KeyboardInterrupt:
         print()

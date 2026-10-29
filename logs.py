@@ -1,3 +1,4 @@
+import gzip
 import re
 import shutil
 import time
@@ -5,6 +6,9 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import psutil
+
+import protonlog
 import watch
 from common import LOGS, run
 
@@ -166,12 +170,18 @@ def sensor_report(appid, start, end, out):
                         f"over 95% full. that's when games freeze")
     if (g := peak("gpu_temp")) and g >= 83:
         warn.append(f"  ! gpu got to {g:.0f}°C")
-    if (hot := sum(1 for v in col("gpu_thermal") if v) * watch.EVERY):
-        warn.append(f"  ! gpu slowed down from heat for {hot}s")
+    # boost backs off a little when warm, only flag real clock drops
+    clocks = sorted(col("gpu_mhz"))
+    normal = clocks[len(clocks) // 2] if clocks else 0
+    slow = [r for r in rows if r.get("gpu_thermal") == "1" and (num(r.get("gpu_mhz")) or 0) < 0.9 * normal]
+    if slow:
+        warn.append(f"  ! gpu slowed down from heat for {len(slow) * watch.EVERY}s")
     if (c := peak("cpu_pkg")) and c >= 90:
         warn.append(f"  ! cpu got to {c:.0f}°C")
-    if (sw := peak("swap_gb")) and sw >= 1:
-        warn.append(f"  ! RAM ran low, {sw} GB went to swap")
+    # zram + swappiness 150 swaps with plenty free, so check used RAM instead
+    total_gb = psutil.virtual_memory().total / 2**30
+    if (ram := peak("ram_gb")) and ram >= 0.9 * total_gb:
+        warn.append(f"  ! RAM ran low, {ram:.0f}/{total_gb:.0f} GB used")
     if miss := sum(1 for r in rows if not r.get("vram")):
         warn.append(f"  ! nvidia-smi didn't answer {'once' if miss == 1 else f'{miss} times'}. the gpu might have hung")
     times = [datetime.strptime(r["time"], watch.TS) for r in rows]
@@ -181,7 +191,7 @@ def sensor_report(appid, start, end, out):
     fmt = lambda v, u: "?" if v is None else f"{v:.0f}{u}"
     last = rows[-1]
     info += [f"  - peaks: vram {fmt(vram, '')}/{fmt(total, ' MiB')}, gpu {fmt(peak('gpu_temp'), '°C')}, "
-             f"cpu {fmt(peak('cpu_pkg'), '°C')}, ram {fmt(peak('ram_gb'), ' GB')}",
+             f"cpu {fmt(peak('cpu_pkg'), '°C')}, ram {fmt(peak('ram_gb'), ' GB')}, swap {fmt(peak('swap_gb'), ' GB')}",
              f"  - last reading {last['time'][11:]}: vram {fmt(num(last['vram']), ' MiB')}, "
              f"gpu {fmt(num(last['gpu_temp']), '°C')}, cpu {fmt(num(last['cpu_pkg']), '°C')}"]
     return warn, info
@@ -213,16 +223,22 @@ def cmd_logs(args):
     out = LOGS / "games" / slug / start.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
 
-    # proton log
-    plog = Path.home() / f"steam-{appid}.log"
+    # proton log: the watcher's copy, else ~/steam-<appid>.log if it's from this session
+    plog = protonlog.find_saved(appid, start, end)
+    home = Path.home() / f"steam-{appid}.log"
+    if not plog and home.exists() and start.timestamp() <= home.stat().st_mtime <= end.timestamp() + 300:
+        plog = home
     lo = launch_options(appid)
     proton_log = None
-    if plog.exists() and plog.stat().st_mtime >= start.timestamp():
+    if plog:
         proton_log = out / "proton.log"
-        if not copy_small(plog, proton_log):
-            with plog.open("rb") as f:  # huge log, keep the tail
+        with (gzip.open if plog.suffix == ".gz" else open)(plog, "rb") as src, proton_log.open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+        if proton_log.stat().st_size > MAX_COPY:  # huge log, keep the tail
+            with proton_log.open("rb") as f:
                 f.seek(-MAX_COPY, 2)
-                proton_log.write_bytes(f.read())
+                tail = f.read()
+            proton_log.write_bytes(tail)
 
     kernel = journal(start, end, "_TRANSPORT=kernel")  # -k would mean current boot only
     errors = journal(start, end, "-p", "err")
@@ -287,19 +303,17 @@ def cmd_logs(args):
     lines += sensor_info
     uses_proton = proton_from_cmd(s["cmd"]) != "native (no Proton)"
     if uses_proton and not proton_log:
-        want = ("PROTON_LOG=1 " + lo) if lo and "PROTON_LOG" not in lo else "PROTON_LOG=1 %command%"
         if "PROTON_LOG" in lo:
             nag = ["! launch options have PROTON_LOG but no log showed up for this session.",
                    f"  it should be at ~/steam-{appid}.log, play again & check"]
+        elif appid in protonlog.armed():
+            nag = ["- no proton log for this session. it's on for the next launch"]
         else:
-            nag = ["! no proton log, you forgot PROTON_LOG=1 :(",
-                   "  steam > right click the game > properties > launch options, set it to:",
-                   f"    {want}",
-                   f"  then play again & run: bench logs {args.game}",
-                   "  take it back out after, the log gets big"]
+            nag = [f"- no proton log for this session. for one next time: bench proton-log {args.game}"]
         lines = lines[:6] + nag + [""] + lines[6:]
     elif uses_proton and "PROTON_LOG" in lo:
-        lines.append(f"  - got the proton log. you can take PROTON_LOG=1 back out of launch options now")
+        lines.append(f"  - got the proton log. you can take PROTON_LOG=1 out of launch options, "
+                     f"bench proton-log {args.game} does it for you now")
     lines += ["", "saved to:", f"  {out}/"]
     lines += [f"    {p.relative_to(out)}" for p in sorted(out.rglob("*")) if p.is_file() and p.name != "summary.txt"][:40]
     (out / "launch-command.txt").write_text(s["cmd"] + "\n")
@@ -320,7 +334,35 @@ def driver_version():
     except OSError:
         return "n/a"
 
+def cmd_proton_log(args):
+    watching = run(["systemctl", "--user", "is-active", "bench-watch"]).stdout.strip() == "active"
+    if not args.game:
+        on = protonlog.armed()
+        names = {g["appid"]: g["name"] for g in manifests()}
+        print("proton log is on for: " + ", ".join(names.get(a, a) for a in on) if on
+              else "proton log is off for every game")
+        return
+    game = find_game(args.game)
+    if args.off:
+        protonlog.disarm(game["appid"])
+        print(f"proton log is off for {game['name']}")
+        return
+    protonlog.arm(game["appid"])
+    for name in protonlog.ensure_links():
+        print(f"! {name} already has its own user_settings.py, so i left it alone. it won't log there")
+    print(f"proton log is on for {game['name']}'s next launch. it turns off when you close the game")
+    if run(["pgrep", "-f", f"SteamLaunch AppId={game['appid']}"]).returncode == 0:
+        print("it's running rn, so restart it for the log")
+    if not watching:
+        print("! bench-watch isn't running, so it won't turn off by itself. start it:")
+        print("    systemctl --user enable --now bench-watch")
+
 def add_parser(sub):
+    p = sub.add_parser("proton-log", help="turn on the proton log for a game's next launch")
+    p.add_argument("game", nargs="?", help="name (fuzzy) or AppID, leave out to see what's on")
+    p.add_argument("--off", action="store_true", help="turn it off again")
+    p.set_defaults(func=cmd_proton_log)
+
     p = sub.add_parser("logs", help="grab a game's logs from its last session")
     p.add_argument("game", help="name (fuzzy) or AppID")
     p.add_argument("--session", type=int, default=1, help="1 = latest, 2 = one before, ...")

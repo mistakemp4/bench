@@ -36,7 +36,17 @@ $ bench logs deadlock --list
 $ bench logs deadlock --session 2
 ```
 
-part of the name works (`va11`, `finals`, `p5r`). for a proton log, set the game's launch options to `PROTON_LOG=1 %command%` first & take it out after.
+part of the name works (`va11`, `finals`, `p5r`).
+
+for a proton log next time:
+
+```bash
+$ bench proton-log deadlock
+$ bench proton-log
+$ bench proton-log deadlock --off
+```
+
+it turns on for the next launch only & turns off when i close the game. needs bench-watch running.
 
 ## Recording While I Play
 
@@ -44,7 +54,7 @@ part of the name works (`va11`, `finals`, `p5r`). for a proton log, set the game
 $ systemctl --user enable --now ~/src/bench/systemd/bench-watch.service
 ```
 
-it saves vram, temps & ram every 2 seconds while a steam game is open. `bench logs` shows them for that session.
+it saves vram, temps & ram every 2 seconds while a steam game is open. `bench logs` shows them for that session. recordings & saved proton logs get deleted after 30 days.
 
 ## Benchmarks
 
@@ -71,6 +81,7 @@ $ bench cpu compare
 - tests: `~/logs/bench/<test>/`
 - game logs: `~/logs/games/<game>/`
 - recordings: `~/logs/sensors/`
+- proton logs: `~/logs/proton/`
 - state reports: `~/logs/state/`
 
 ## Rebuilding the Page
