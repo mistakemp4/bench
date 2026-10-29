@@ -1,0 +1,12 @@
+[Unit]
+Description=Record vram & temps while Steam games run (bench watch)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/bench watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

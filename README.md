@@ -7,6 +7,7 @@ my pc testing & troubleshooting tool. `oracle` is the same thing with a cooler n
 - [Installing](#installing)
 - [Checking Everything](#checking-everything)
 - [Game Logs](#game-logs)
+- [Recording While I Play](#recording-while-i-play)
 - [Benchmarks](#benchmarks)
 - [Comparing Runs](#comparing-runs)
 - [Where Stuff Saves](#where-stuff-saves)
@@ -37,6 +38,14 @@ $ bench logs deadlock --session 2
 
 part of the name works (`va11`, `finals`, `p5r`). for a proton log, set the game's launch options to `PROTON_LOG=1 %command%` first & take it out after.
 
+## Recording While I Play
+
+```bash
+$ systemctl --user enable --now ~/src/bench/systemd/bench-watch.service
+```
+
+it saves vram, temps & ram every 2 seconds while a steam game is open. `bench logs` shows them for that session.
+
 ## Benchmarks
 
 ```bash
@@ -61,6 +70,7 @@ $ bench cpu compare
 
 - tests: `~/logs/bench/<test>/`
 - game logs: `~/logs/games/<game>/`
+- recordings: `~/logs/sensors/`
 - state reports: `~/logs/state/`
 
 ## Rebuilding the Page

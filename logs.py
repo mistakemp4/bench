@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import watch
 from common import LOGS, run
 
 STEAM = Path.home() / ".local/share/Steam"
@@ -138,6 +139,53 @@ def game_files(game, start, end):
             except OSError:
                 continue
 
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+def sensor_report(appid, start, end, out):
+    rows = watch.load(appid, start, end)
+    if not rows:
+        on = run(["systemctl", "--user", "is-active", "bench-watch"]).stdout.strip() == "active"
+        return [], ["  - no sensor readings for this session" + ("" if on else
+                    ". turn the recorder on: systemctl --user enable --now bench-watch")]
+    with (out / "sensors.csv").open("w") as f:
+        f.write(",".join(watch.FIELDS) + "\n")
+        f.writelines(",".join(r.get(k) or "" for k in watch.FIELDS) + "\n" for r in rows)
+    col = lambda k: [v for r in rows if (v := num(r.get(k))) is not None]
+    peak = lambda k: max(col(k), default=None)
+    warn, info = [], []
+    vram, total = peak("vram"), peak("vram_total")
+    if vram and total:
+        full = sum(1 for v in col("vram") if v >= 0.95 * total) * watch.EVERY
+        if full:
+            took = fmt_dur(timedelta(seconds=full)) if full >= 60 else f"{full}s"
+            warn.append(f"  ! vram was {vram:.0f}/{total:.0f} MiB at its peak, {took} "
+                        f"over 95% full. that's when games freeze")
+    if (g := peak("gpu_temp")) and g >= 83:
+        warn.append(f"  ! gpu got to {g:.0f}°C")
+    if (hot := sum(1 for v in col("gpu_thermal") if v) * watch.EVERY):
+        warn.append(f"  ! gpu slowed down from heat for {hot}s")
+    if (c := peak("cpu_pkg")) and c >= 90:
+        warn.append(f"  ! cpu got to {c:.0f}°C")
+    if (sw := peak("swap_gb")) and sw >= 1:
+        warn.append(f"  ! RAM ran low, {sw} GB went to swap")
+    if miss := sum(1 for r in rows if not r.get("vram")):
+        warn.append(f"  ! nvidia-smi didn't answer {'once' if miss == 1 else f'{miss} times'}. the gpu might have hung")
+    times = [datetime.strptime(r["time"], watch.TS) for r in rows]
+    for a, b in zip(times, times[1:]):
+        if (b - a).total_seconds() > 20:
+            warn.append(f"  ! no readings from {a:%H:%M:%S} to {b:%H:%M:%S}. the pc might have frozen")
+    fmt = lambda v, u: "?" if v is None else f"{v:.0f}{u}"
+    last = rows[-1]
+    info += [f"  - peaks: vram {fmt(vram, '')}/{fmt(total, ' MiB')}, gpu {fmt(peak('gpu_temp'), '°C')}, "
+             f"cpu {fmt(peak('cpu_pkg'), '°C')}, ram {fmt(peak('ram_gb'), ' GB')}",
+             f"  - last reading {last['time'][11:]}: vram {fmt(num(last['vram']), ' MiB')}, "
+             f"gpu {fmt(num(last['gpu_temp']), '°C')}, cpu {fmt(num(last['cpu_pkg']), '°C')}"]
+    return warn, info
+
 def fmt_dur(td):
     m = int(td.total_seconds() // 60)
     return f"{m // 60}h {m % 60}m" if m >= 60 else f"{m}m"
@@ -207,6 +255,7 @@ def cmd_logs(args):
                 perr[re.sub(r"^\S+:\S+:err:", "err:", l)[:120]] += 1
     dumps = [c for c in copied if c.lower().endswith((".dmp", ".mdmp"))]
     bad_exit = [e for e in s["exits"] if e not in (0, -1)]  # steam logs -1 for normal helper exits
+    sensor_warn, sensor_info = sensor_report(appid, start, end, out)
     oldest = oldest_system_log()
     logs_gone = oldest and oldest > start
 
@@ -222,6 +271,7 @@ def cmd_logs(args):
     if found:
         for label, n, why, sample in found:
             lines += [f"  ! {label} x{n}: {why}", f"      e.g. {sample}"]
+    lines += sensor_warn
     if bad_exit:
         lines.append(f"  ! exit code {', '.join(map(str, sorted(set(bad_exit))))}: it crashed or got force closed")
     if dumps:
@@ -232,8 +282,9 @@ def cmd_logs(args):
     if logs_gone:
         lines += [f"  ? system logs from before {oldest:%Y-%m-%d %H:%M} are gone, so i can't check this session",
                   "    for driver errors. play again & run this right after"]
-    if not (found or bad_exit or dumps or perr or logs_gone):
+    if not (found or sensor_warn or bad_exit or dumps or perr or logs_gone):
         lines.append("  nothing weird in the system logs for this session")
+    lines += sensor_info
     uses_proton = proton_from_cmd(s["cmd"]) != "native (no Proton)"
     if uses_proton and not proton_log:
         want = ("PROTON_LOG=1 " + lo) if lo and "PROTON_LOG" not in lo else "PROTON_LOG=1 %command%"

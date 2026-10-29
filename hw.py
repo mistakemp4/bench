@@ -13,7 +13,7 @@ import psutil
 
 from common import avg, compare_runs, have, list_runs, print_table, save_run, stamp
 
-GPU_FIELDS = "temperature.gpu,clocks.gr,power.draw,utilization.gpu,memory.used,fan.speed,clocks_event_reasons.active"
+GPU_FIELDS = "temperature.gpu,clocks.gr,power.draw,utilization.gpu,memory.used,fan.speed,clocks_event_reasons.active,memory.total"
 
 def need(tool, pkg):
     if not have(tool):
@@ -26,15 +26,19 @@ def num(v):
         return None
 
 def gpu_sample():
-    r = subprocess.run(["nvidia-smi", f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader,nounits"],
-                       capture_output=True, text=True)
+    try:  # a wedged gpu can hang nvidia-smi
+        r = subprocess.run(["nvidia-smi", f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
     v = [x.strip() for x in r.stdout.split(",")]
-    if len(v) < 7:
+    if len(v) < 8:
         return None
     reasons = int(v[6], 16) if v[6].startswith("0x") else 0
     # 0x20 sw thermal, 0x40 hw thermal, 0x4 sw power cap
     return {"temp": num(v[0]), "mhz": num(v[1]), "watts": num(v[2]), "util": num(v[3]),
-            "vram": num(v[4]), "fan": num(v[5]), "thermal": bool(reasons & 0x60), "powercap": bool(reasons & 0x4)}
+            "vram": num(v[4]), "vram_total": num(v[7]), "fan": num(v[5]),
+            "thermal": bool(reasons & 0x60), "powercap": bool(reasons & 0x4)}
 
 def sampler(samples, stop):
     t0 = time.monotonic()

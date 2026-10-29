@@ -7,12 +7,13 @@ import cpu
 import hw
 import logs
 import state
+import watch
 
 def main():
     prog = Path(sys.argv[0]).name
     ap = argparse.ArgumentParser(prog=prog, description="benchmarks + troubleshooting")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for mod in (cpu, hw, logs, state):
+    for mod in (cpu, hw, logs, state, watch):
         mod.add_parser(sub)
     args = ap.parse_args()
     args.func(args)
