@@ -8,6 +8,7 @@ from pathlib import Path
 
 import psutil
 
+import gpu
 import protonlog
 import watch
 from common import LOGS, run
@@ -24,6 +25,9 @@ KNOWN = [
     ("NVRM", r"NVRM(?!: loading)|Failed to allocate NVKMS memory",
      "nvidia driver errors. usually means VRAM ran out"),
     ("Xid", r"NVRM: Xid", "the gpu crashed (Xid). driver bug, too hot or a bad overclock"),
+    ("amdgpu timeout", r"amdgpu.*ring \S+ timeout", "the gpu stopped responding (ring timeout)"),
+    ("amdgpu reset", r"amdgpu.*GPU reset", "the gpu had to reset. driver bug, too hot or a bad overclock"),
+    ("amdgpu fault", r"amdgpu.*page fault", "the gpu read memory it shouldn't. usually a driver or game bug"),
     ("OOM", r"Out of memory|oom-kill", "RAM ran out & something got killed"),
     ("segfault", r"segfault at", "something crashed (segfault)"),
     ("GPU hang", r"GPU has fallen off the bus|timeout waiting", "the gpu stopped responding"),
@@ -183,7 +187,7 @@ def sensor_report(appid, start, end, out):
     if (ram := peak("ram_gb")) and ram >= 0.9 * total_gb:
         warn.append(f"  ! RAM ran low, {ram:.0f}/{total_gb:.0f} GB used")
     if miss := sum(1 for r in rows if not r.get("vram")):
-        warn.append(f"  ! nvidia-smi didn't answer {'once' if miss == 1 else f'{miss} times'}. the gpu might have hung")
+        warn.append(f"  ! the gpu didn't answer {'once' if miss == 1 else f'{miss} times'}. it might have hung")
     times = [datetime.strptime(r["time"], watch.TS) for r in rows]
     for a, b in zip(times, times[1:]):
         if (b - a).total_seconds() > 20:
@@ -280,7 +284,7 @@ def cmd_logs(args):
         f"session   {start:%Y-%m-%d %H:%M:%S} -> {'still running' if running else f'{end:%H:%M:%S}'}  ({fmt_dur(end - start)})",
         f"proton    {proton_from_cmd(s['cmd'])}",
         f"launch    {lo or '(none)'}",
-        f"now       kernel {run(['uname', '-r']).stdout.strip()}, nvidia {driver_version()} (might not match the session)",
+        f"now       kernel {run(['uname', '-r']).stdout.strip()}, {gpu.driver()} (might not match the session)",
         "",
         "what i found:",
     ]
@@ -327,12 +331,6 @@ def oldest_system_log():
         return datetime.fromtimestamp(float(r.stdout.split()[0]))
     except (IndexError, ValueError):
         return None
-
-def driver_version():
-    try:
-        return Path("/sys/module/nvidia/version").read_text().strip()
-    except OSError:
-        return "n/a"
 
 def cmd_proton_log(args):
     watching = run(["systemctl", "--user", "is-active", "bench-watch"]).stdout.strip() == "active"

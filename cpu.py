@@ -23,6 +23,11 @@ METRICS = [("load_pkg", "load temp", True, 1.5, False), ("max_pkg", "max temp", 
 
 def temps():
     t = psutil.sensors_temperatures()
+    if "k10temp" in t:  # amd: Tctl = package, Tccd = per chiplet
+        s = t["k10temp"]
+        pkg = next((x.current for x in s if x.label == "Tctl"), None)
+        core = max((x.current for x in s if x.label.startswith("Tccd")), default=None)
+        return pkg, core
     cores = t.get("coretemp", [])
     pkg = next((s.current for s in cores if s.label.startswith("Package")), None)
     core = max((s.current for s in cores if s.label.startswith("Core")), default=None)
@@ -116,7 +121,8 @@ def cmd_run(args):
         "score": round(float(m.group(1))) if m else None,
         "secs_hot": sum(1 for s in load if (s["pkg"] or 0) >= HOT),
         "throttle_events": throttle_count() - throttle_start,
-        "cooldown_drop": round(load[-1]["pkg"] - cool[-1]["pkg"], 1) if load and cool else None,
+        "cooldown_drop": round(load[-1]["pkg"] - cool[-1]["pkg"], 1)
+                         if load and cool and load[-1]["pkg"] is not None and cool[-1]["pkg"] is not None else None,
         "room": args.room,
     }
     detail = {"cpu": cpu_model(), "kernel": Path("/proc/sys/kernel/osrelease").read_text().strip(),

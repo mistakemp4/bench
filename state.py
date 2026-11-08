@@ -8,7 +8,8 @@ import psutil
 
 import cpu
 from common import LOGS, run, stamp
-from logs import APPS, KNOWN, STEAM, driver_version
+import gpu
+from logs import APPS, KNOWN, STEAM
 
 STATE = LOGS / "state"
 # readings change every run; only flag big moves
@@ -16,30 +17,25 @@ READINGS = {"gpu_temp": 8, "vram_used_mb": 500, "cpu_temp": 8, "ram_used_gb": 2,
             "disk_root_pct": 5, "nvme_temp": 8, "gpu_util": 30, "gpu_power_w": 30, "gpu_mhz": 500,
             "swap_used_gb": 1}
 
-def nvidia():
-    q = run(["nvidia-smi", "--query-gpu=name,temperature.gpu,memory.used,memory.total,power.draw,"
-             "utilization.gpu,clocks.gr", "--format=csv,noheader,nounits"])
-    if q.returncode != 0:
+def amd():
+    s = gpu.sample()
+    if not s:
         return {}, []
-    name, temp, used, total, power, util, clk = [v.strip() for v in q.stdout.splitlines()[0].split(",")]
-    gpu = {"gpu": name, "gpu_temp": float(temp), "vram_used_mb": int(used), "vram_total_mb": int(total),
-           "gpu_power_w": float(power), "gpu_util": int(util), "gpu_mhz": int(clk)}
-    procs = []
-    for m in re.finditer(r"\|\s+\d+\s+\S+\s+\S+\s+(\d+)\s+\S+\s+.+?\s+(\d+)MiB\s+\|", run(["nvidia-smi"]).stdout):
-        pid, mb = int(m.group(1)), int(m.group(2))
+    g = {"gpu": gpu.name(), "gpu_temp": s["temp"], "gpu_hotspot": s["hotspot"], "vram_used_mb": s["vram"],
+         "vram_total_mb": s["vram_total"], "gpu_power_w": s["watts"], "gpu_util": round(s["util"] or 0),
+         "gpu_mhz": round(s["mhz"] or 0)}
+    merged = {}
+    for pid, mb in gpu.vram_by_pid().items():
         try:
             p = psutil.Process(pid)
             name = Path(p.exe()).name if p.exe() else p.name()
             cmd = " ".join(p.cmdline())
-            if (a := re.search(r"AppId=(\d+)", cmd)) or "steamapps/common/" in cmd:
-                name += f" ({re.search(r'steamapps/common/([^/]+)', cmd).group(1)})" if "steamapps/common/" in cmd else ""
+            if m := re.search(r"steamapps/common/([^/]+)", cmd):
+                name += f" ({m.group(1)})"
         except (psutil.Error, OSError):
             name = "?"
-        procs.append((mb, name))
-    merged = {}
-    for mb, name in procs:
         merged[name] = merged.get(name, 0) + mb
-    return gpu, sorted(((mb, n) for n, mb in merged.items()), reverse=True)
+    return g, sorted(((mb, n) for n, mb in merged.items()), reverse=True)
 
 def proton_versions():
     out = {}
@@ -107,20 +103,18 @@ def game_running():
     return None
 
 def collect(note):
-    gpu, vram = nvidia()
+    gpu_info, vram = amd()
     temps = psutil.sensors_temperatures()
     pkg, _ = cpu.temps()
     vm, sw = psutil.virtual_memory(), psutil.swap_memory()
     errs, n_err = boot_errors()
-    installed_nv = run(["pacman", "-Q", "nvidia-utils"]).stdout.split()
     kernel = os.uname().release
     s = {
         "id": stamp(), "note": note, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "kernel": kernel,
         "kernel_reboot_needed": not Path(f"/usr/lib/modules/{kernel}").exists(),
-        "nvidia_loaded": driver_version(),
-        "nvidia_installed": installed_nv[1].split("-")[0] if len(installed_nv) > 1 else "?",
-        **gpu,
+        "gpu_driver": gpu.driver(),
+        **gpu_info,
         "vram_top": [f"{n} {mb}MiB" for mb, n in vram[:6]],
         "cpu_temp": pkg, "cpu_load": psutil.cpu_percent(interval=1),
         "cpu_top": [f"{n} {c:.0f}%" for n, c in cpu.top_procs(5, 3)],
@@ -146,14 +140,12 @@ def report(s):
     L.append("drivers")
     L.append((bad if s["kernel_reboot_needed"] else ok) + f"kernel {s['kernel']}"
              + ("  (updated, reboot to use it)" if s["kernel_reboot_needed"] else ""))
-    nv_ok = s["nvidia_loaded"] == s["nvidia_installed"]
-    L.append((ok if nv_ok else bad) + f"nvidia {s['nvidia_loaded']}"
-             + ("" if nv_ok else f"  ({s['nvidia_installed']} is installed, reboot to use it)"))
+    L.append(ok + s.get("gpu_driver", "?"))
     L.append(ok + "proton " + ", ".join(f"{k} {v}" for k, v in s["proton"].items()))
     if "gpu" in s:
         vram_pct = s["vram_used_mb"] / s["vram_total_mb"] * 100
         L += ["", "gpu"]
-        L.append((bad if s["gpu_temp"] >= 83 else ok) + f"{s['gpu']}  {s['gpu_temp']:.0f}°C  {s['gpu_mhz']} MHz  "
+        L.append((bad if s["gpu_temp"] >= 83 else ok) + f"{s['gpu']}  {s['gpu_temp']:.0f}°C (hotspot {s['gpu_hotspot']:.0f})  {s['gpu_mhz']} MHz  "
                  f"{s['gpu_power_w']:.0f} W  {s['gpu_util']}% busy")
         L.append((bad if vram_pct >= 85 else ok) + f"VRAM {s['vram_used_mb']}/{s['vram_total_mb']} MiB ({vram_pct:.0f}%)"
                  + ("  (almost full, games might freeze)" if vram_pct >= 85 else ""))

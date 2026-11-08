@@ -11,9 +11,8 @@ from pathlib import Path
 
 import psutil
 
+import gpu
 from common import avg, compare_runs, have, list_runs, print_table, save_run, stamp
-
-GPU_FIELDS = "temperature.gpu,clocks.gr,power.draw,utilization.gpu,memory.used,fan.speed,clocks_event_reasons.active,memory.total"
 
 def need(tool, pkg):
     if not have(tool):
@@ -26,19 +25,7 @@ def num(v):
         return None
 
 def gpu_sample():
-    try:  # a wedged gpu can hang nvidia-smi
-        r = subprocess.run(["nvidia-smi", f"--query-gpu={GPU_FIELDS}", "--format=csv,noheader,nounits"],
-                           capture_output=True, text=True, timeout=5)
-    except subprocess.TimeoutExpired:
-        return None
-    v = [x.strip() for x in r.stdout.split(",")]
-    if len(v) < 8:
-        return None
-    reasons = int(v[6], 16) if v[6].startswith("0x") else 0
-    # 0x20 sw thermal, 0x40 hw thermal, 0x4 sw power cap
-    return {"temp": num(v[0]), "mhz": num(v[1]), "watts": num(v[2]), "util": num(v[3]),
-            "vram": num(v[4]), "vram_total": num(v[7]), "fan": num(v[5]),
-            "thermal": bool(reasons & 0x60), "powercap": bool(reasons & 0x4)}
+    return gpu.sample()
 
 def sampler(samples, stop):
     t0 = time.monotonic()
@@ -46,13 +33,14 @@ def sampler(samples, stop):
         if s := gpu_sample():
             s["t"] = round(time.monotonic() - t0, 1)
             samples.append(s)
-            print(f"\r  {s['t']:5.0f}s  {s['temp']:.0f}°C  {s['mhz']:.0f} MHz  {s['watts']:.0f} W  "
-                  f"{s['util']:.0f}% busy  fan {s['fan']:.0f}%   ", end="", flush=True)
+            f = lambda v: "?" if v is None else f"{v:.0f}"
+            print(f"\r  {s['t']:5.0f}s  {f(s['temp'])}°C  {f(s['mhz'])} MHz  {f(s['watts'])} W  "
+                  f"{f(s['util'])}% busy  fan {f(s['fan'])}%   ", end="", flush=True)
         stop.wait(1)
 
 # gpu
 GPU_COLS = [("id", "run"), ("note", "note"), ("tool", "tool"), ("score", "score"), ("avg_temp", "avg°C"),
-            ("max_temp", "max°C"), ("avg_mhz", "MHz"), ("avg_watts", "W"), ("max_fan", "fan%"),
+            ("max_temp", "max°C"), ("max_hot", "hotspot°C"), ("avg_mhz", "MHz"), ("avg_watts", "W"), ("max_fan", "fan%"),
             ("secs_thermal", "thermal-limited s"), ("max_vram", "VRAM MiB")]
 GPU_METRICS = [("score", "score", False, 0.03, True), ("avg_temp", "avg temp", True, 2, False),
                ("max_temp", "max temp", True, 2, False), ("avg_mhz", "clock", False, 30, False),
@@ -84,7 +72,8 @@ def gpu_run(args):
     res = {"id": stamp(), "note": args.note, "tool": tool, "score": int(m.group(1)),
            "avg_temp": avg(s["temp"] for s in busy), "max_temp": max(s["temp"] for s in samples),
            "avg_mhz": round(avg(s["mhz"] for s in busy) or 0), "avg_watts": avg(s["watts"] for s in busy),
-           "max_fan": round(max(s["fan"] for s in samples)), "secs_thermal": sum(s["thermal"] for s in samples),
+           "max_hot": max((s["hotspot"] for s in samples if s.get("hotspot") is not None), default=None),
+           "max_fan": max((s["fan"] for s in samples if s["fan"] is not None), default=None), "secs_thermal": sum(s["thermal"] for s in samples),
            "max_vram": round(max(s["vram"] for s in samples))}
     path = save_run("gpu", res, {"samples": samples, "output": r.stdout[-4000:]}, [k for k, _ in GPU_COLS])
     print_table([res], GPU_COLS)
