@@ -37,11 +37,19 @@ def save_run(kind, res, detail, fields):
     path = d / f"{res['id']}.json"
     path.write_text(json.dumps({**res, **detail}, indent=1))
     summary = d / "summary.csv"
-    new = not summary.exists()
-    with summary.open("a", newline="") as f:
+    rows = []
+    if summary.exists():
+        with summary.open() as f:
+            r = csv.DictReader(f)
+            if r.fieldnames == fields:
+                rows = None
+            else:  # columns changed, rewrite old rows under the new header
+                rows = list(r)
+    with summary.open("a" if rows is None else "w", newline="") as f:
         w = csv.DictWriter(f, fields, extrasaction="ignore")
-        if new:
+        if rows is not None:
             w.writeheader()
+            w.writerows(rows)
         w.writerow(res)
     return path
 

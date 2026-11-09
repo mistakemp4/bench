@@ -172,7 +172,10 @@ def sensor_report(appid, start, end, out):
             took = fmt_dur(timedelta(seconds=full)) if full >= 60 else f"{full}s"
             warn.append(f"  ! vram was {vram:.0f}/{total:.0f} MiB at its peak, {took} "
                         f"over 95% full. that's when games freeze")
-    if (g := peak("gpu_temp")) and g >= 83:
+    # amd throttles on hotspot, old nvidia sessions only have the core temp
+    if (h := peak("gpu_hot")) and h >= (lim := gpu.hot_limit()):
+        warn.append(f"  ! gpu hotspot got to {h:.0f}°C (throttles at {lim + 10:.0f})")
+    elif h is None and (g := peak("gpu_temp")) and g >= 83:
         warn.append(f"  ! gpu got to {g:.0f}°C")
     # boost backs off a little when warm, only flag real clock drops
     clocks = sorted(col("gpu_mhz"))
@@ -194,7 +197,8 @@ def sensor_report(appid, start, end, out):
             warn.append(f"  ! no readings from {a:%H:%M:%S} to {b:%H:%M:%S}. the pc might have frozen")
     fmt = lambda v, u: "?" if v is None else f"{v:.0f}{u}"
     last = rows[-1]
-    info += [f"  - peaks: vram {fmt(vram, '')}/{fmt(total, ' MiB')}, gpu {fmt(peak('gpu_temp'), '°C')}, "
+    hot = f" (hotspot {h:.0f}°C)" if h is not None else ""
+    info += [f"  - peaks: vram {fmt(vram, '')}/{fmt(total, ' MiB')}, gpu {fmt(peak('gpu_temp'), '°C')}{hot}, "
              f"cpu {fmt(peak('cpu_pkg'), '°C')}, ram {fmt(peak('ram_gb'), ' GB')}, swap {fmt(peak('swap_gb'), ' GB')}",
              f"  - last reading {last['time'][11:]}: vram {fmt(num(last['vram']), ' MiB')}, "
              f"gpu {fmt(num(last['gpu_temp']), '°C')}, cpu {fmt(num(last['cpu_pkg']), '°C')}"]

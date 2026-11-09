@@ -6,16 +6,21 @@ from common import run
 
 @cache
 def device():
-    for d in sorted(Path("/sys/class/drm").iterdir()):
+    # card numbers swap between boots and the cpu has an igpu, so pick the most vram
+    best, most = None, -1
+    for d in Path("/sys/class/drm").iterdir():
         dev = d / "device"
         if not re.fullmatch(r"card\d+", d.name):
             continue
         try:
-            if (dev / "vendor").read_text().strip() == "0x1002" and (dev / "gpu_busy_percent").exists():
-                return dev
-        except OSError:
+            if (dev / "vendor").read_text().strip() != "0x1002" or not (dev / "gpu_busy_percent").exists():
+                continue
+            vram = int((dev / "mem_info_vram_total").read_text())
+        except (OSError, ValueError):
             continue
-    return None
+        if vram > most:
+            best, most = dev, vram
+    return best
 
 @cache
 def hwmon():
@@ -36,7 +41,6 @@ def sample():
     if vram is None:  # gpu not answering
         return None
     hot = read(hw / "temp2_input", 1000)
-    crit = read(hw / "temp2_crit", 1000) or 110
     watts = read(hw / "power1_average", 1e6) or read(hw / "power1_input", 1e6)
     cap = read(hw / "power1_cap", 1e6)
     pwm, pwm_max = read(hw / "pwm1"), read(hw / "pwm1_max") or 255
@@ -45,8 +49,14 @@ def sample():
             "vram": round(vram), "vram_total": round(read(dev / "mem_info_vram_total", 2**20) or 0),
             "fan": None if pwm is None else round(pwm / pwm_max * 100),
             # sysfs has no throttle flags: hotspot near its limit, power at the cap
-            "thermal": hot is not None and hot >= crit - 10,
+            "thermal": hot is not None and hot >= hot_limit(),
             "powercap": bool(watts and cap and watts >= 0.98 * cap)}
+
+@cache
+def hot_limit():
+    # hotspot (junction) is what amd throttles on; warn 10° under its crit
+    hw = hwmon()
+    return ((hw and read(hw / "temp2_crit", 1000)) or 110) - 10
 
 def name():
     dev = device()

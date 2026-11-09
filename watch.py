@@ -18,7 +18,7 @@ IGNORED_APPS = {"431960"}  # wallpaper engine
 KEEP_DAYS = 30
 RELAUNCH_GRACE = 15
 TS = "%Y-%m-%d %H:%M:%S"
-FIELDS = ["time", "vram", "vram_total", "gpu_temp", "gpu_mhz", "gpu_watts", "gpu_util", "fan",
+FIELDS = ["time", "vram", "vram_total", "gpu_temp", "gpu_hot", "gpu_mhz", "gpu_watts", "gpu_util", "fan",
           "gpu_thermal", "cpu_pkg", "cpu_mhz", "cpu_util", "ram_gb", "swap_gb"]
 
 def game_running():
@@ -36,7 +36,7 @@ def sample():
     pkg, _ = cpu.temps()
     mem, swap = psutil.virtual_memory(), psutil.swap_memory()
     return {"time": datetime.now().strftime(TS), "vram": g.get("vram"), "vram_total": g.get("vram_total"),
-            "gpu_temp": g.get("temp"), "gpu_mhz": g.get("mhz"), "gpu_watts": g.get("watts"),
+            "gpu_temp": g.get("temp"), "gpu_hot": g.get("hotspot"), "gpu_mhz": g.get("mhz"), "gpu_watts": g.get("watts"),
             "gpu_util": g.get("util"), "fan": g.get("fan"), "gpu_thermal": int(g["thermal"]) if g else None,
             "cpu_pkg": pkg, "cpu_mhz": cpu.mhz(), "cpu_util": psutil.cpu_percent(None),
             "ram_gb": round(mem.used / 2**30, 1), "swap_gb": round(swap.used / 2**30, 1)}
@@ -66,7 +66,7 @@ def record(appid, live):
             os.fsync(f.fileno())  # survive a hard freeze
             if live:
                 fmt = lambda v: "?" if v is None else f"{v:.0f}"
-                print(f"\r  vram {fmt(s['vram'])}/{fmt(s['vram_total'])} MiB  gpu {fmt(s['gpu_temp'])}°C  "
+                print(f"\r  vram {fmt(s['vram'])}/{fmt(s['vram_total'])} MiB  gpu {fmt(s['gpu_temp'])}°C hotspot {fmt(s['gpu_hot'])}°C  "
                       f"cpu {fmt(s['cpu_pkg'])}°C  ram {s['ram_gb']} GB   ", end="", flush=True)
             time.sleep(EVERY)
     print(("\n" if live else "") + f"game {appid} closed", flush=True)
